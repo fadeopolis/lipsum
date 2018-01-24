@@ -1,0 +1,298 @@
+#!/usr/bin/python3
+
+import argparse
+import itertools
+import re
+import shutil
+import sys
+import textwrap
+
+LIPSUM = '''\
+Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
+incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis
+nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore
+eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt
+in culpa qui officia deserunt mollit anim id est laborum.'''
+
+if __name__ == '__main__':
+  parser = argparse.ArgumentParser()
+
+  options = {}
+
+  def option(group, *names, help: str, default, type: type = str, pretty_default = None):
+    assert names
+
+    if pretty_default is None:
+      pretty_default = repr(default)
+
+    arg = group.add_argument(
+      *names,
+      help=help + f' (default: {pretty_default})',
+      default=default,
+      type=type,
+    )
+
+    options.setdefault(group, []).append(arg.dest)
+
+  def bool_option(group, *names, help: str, default):
+    assert names
+
+    mut = group.add_mutually_exclusive_group()
+
+    negations = []
+    for name in names:
+      prefix, name = re.match('(-+)(.*)', name).groups()
+
+      negations.append(f'{prefix}no-{name}')
+
+    arg = mut.add_argument(
+      *names,
+      help=help + f' (default: {default!r})',
+      action='store_true',
+      default=default,
+    )
+    # add negation
+    mut.add_argument(
+      *negations,
+      dest=arg.dest,
+      help=f'turn off {name}',
+      action='store_false',
+    )
+
+    options.setdefault(group, []).append(arg.dest)
+
+  def error(code, *msg):
+    print(f'{parser.prog}: error: {" ".join(map(str, msg))}', file=sys.stderr)
+    exit(code)
+
+  output = parser.add_argument_group('output options')
+
+  option(
+    output,
+    '-t', '--text',
+    default=LIPSUM,
+    pretty_default='lorem ipsum ...',
+    help='text to write',
+  )
+
+  option(
+    output,
+    '-o', '--output',
+    default=sys.stdout,
+    pretty_default='stdout',
+    type=argparse.FileType('w'),
+    help='file to write to',
+  )
+
+  mut = output.add_mutually_exclusive_group()
+
+  mut.add_argument(
+    '-r', '--repetitions',
+    type=int,
+    help='number of bytes of repetitions of lorem ipsum to output',
+  )
+  mut.add_argument(
+    '-b', '--bytes',
+    type=int,
+    help='number of bytes of text to output',
+  )
+  mut.add_argument(
+    '-c', '--chars',
+    type=int,
+    help='number of chars of text to output',
+  )
+  mut.add_argument(
+    '-l', '--lines',
+    type=int,
+    help='number of lines of text to output',
+  )
+
+  bool_option(
+    output,
+    '--trailing-newline', '--nl',
+    help='whether to end the output with a newline (is included in --chars and --bytes count)',
+    default=True,
+  )
+
+  format = parser.add_argument_group('formatting options')
+
+  option(
+    format,
+    '-w', '--width',
+    default=shutil.get_terminal_size().columns,
+    type=int,
+    help='the maximum width of wrapped lines (unless break_long_words is false)',
+  )
+  option(
+    format,
+    '--initial-indent',
+    default="",
+    help='''
+      string that will be prepended to the first line of wrapped
+      output.  Counts towards the line's width.
+    ''',
+  )
+  option(
+    format,
+    '--subsequent-indent',
+    default="",
+    help='''
+        string that will be prepended to all lines save the first
+        of wrapped output; also counts towards each line's width.
+    ''',
+  )
+  bool_option(
+    format,
+    '--expand-tabs',
+    default=True,
+    help='''
+        Expand tabs in input text to spaces before further processing.
+        Each tab will become 0 .. 'tabsize' spaces, depending on its position
+        in its line.  If false, each tab is treated as a single character.
+    ''',
+  )
+  option(
+    format,
+    '--tabsize',
+    default=8,
+    type=int,
+    help='''
+        Expand tabs in input text to 0 .. 'tabsize' spaces, unless
+        'expand_tabs' is false.
+    ''',
+  )
+  bool_option(
+    format,
+    '--replace-whitespace',
+    default=True,
+    help='''
+        Replace all whitespace characters in the input text by spaces
+        after tab expansion.  Note that if expand_tabs is false and
+        replace_whitespace is true, every tab will be converted to a
+        single space!
+    ''',
+  )
+  bool_option(
+    format,
+    '--fix-sentence-endings',
+    default=False,
+    help='''
+        Ensure that sentence-ending punctuation is always followed
+        by two spaces.  Off by default because the algorithm is
+        (unavoidably) imperfect.
+    ''',
+  )
+  bool_option(
+    format,
+    '--break-long-words',
+    default=True,
+    help='''
+        Break words longer than 'width'.  If false, those words will not
+        be broken, and some lines might be longer than 'width'.
+    ''',
+  )
+  bool_option(
+    format,
+    '--break-on-hyphens',
+    default=True,
+    help='''
+        Allow breaking hyphenated words. If true, wrapping will occur
+        preferably on whitespaces and right after hyphens part of
+        compound words.
+    ''',
+  )
+  bool_option(
+    format,
+    '--drop-whitespace',
+    default=True,
+    help='''
+        Drop leading and trailing whitespace from lines.
+    ''',
+  )
+  option(
+    format,
+    '--max-lines',
+    default=None,
+    type=int,
+    help='''
+        Truncate wrapped lines.
+    ''',
+  )
+  option(
+    format,
+    '--placeholder',
+    default=' [...]',
+    help='''
+        Append to the last line of truncated text.
+    ''',
+  )
+
+  args = parser.parse_args()
+
+  textwrap_args = {fmt: getattr(args, fmt) for fmt in options[format]}
+  dst           = args.output
+  lipsum        = args.text
+
+  def lipsum_fill(repetitions, **textwrap_args):
+    return textwrap.fill(' '.join([lipsum] * repetitions), **textwrap_args)
+
+  def lipsum_wrap(repetitions, **textwrap_args):
+    return textwrap.wrap(' '.join([lipsum] * repetitions), **textwrap_args)
+
+  def write_text():
+    if args.bytes:
+      if args.bytes < 0:
+        error(1, 'negative value given to --bytes')
+
+      for i in itertools.count(1, 5):
+        txt = lipsum_fill(i, **textwrap_args).encode('UTF-8')
+        nl  = b'\n' if args.trailing_newline else b''
+
+        txt = txt[:args.bytes - len(nl)] + nl
+
+        if len(txt) >= args.bytes:
+          dst.buffer.write(txt)
+          exit(0)
+
+    if args.chars is not None:
+      if args.chars < 0:
+        error(1, 'negative value given to --chars')
+
+      for i in itertools.count(1, 5):
+        txt = lipsum_fill(i, **textwrap_args)
+        nl  = '\n' if args.trailing_newline else ''
+
+        txt = txt[:args.chars - len(nl)] + nl
+
+        if len(txt) >= args.chars:
+          dst.write(txt)
+          exit(0)
+
+    if args.lines:
+      if args.lines < 0:
+        error(1, 'negative value given to --lines')
+
+      for i in itertools.count(1):
+        txt = lipsum_wrap(i, **textwrap_args)
+
+        if len(txt) >= args.lines:
+          txt = '\n'.join(txt[:args.lines])
+          dst.write(txt)
+          if args.trailing_newline:
+            dst.write('\n')
+          return
+
+    # if no output option is given just write one repetition of lipsum
+    if args.repetitions is None:
+      args.repetitions = 1
+
+    if args.repetitions < 0:
+      error(1, 'negative value given to --repetitions')
+
+    txt = lipsum_fill(args.repetitions, **textwrap_args)
+    dst.write(txt)
+    if args.trailing_newline:
+      dst.write('\n')
+
+  write_text()
