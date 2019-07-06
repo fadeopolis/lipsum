@@ -10,7 +10,8 @@ import re
 import shutil
 import sys
 import textwrap
-from typing import *
+from typing    import *
+from typing.io import *
 
 LIPSUM = '''\
 Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
@@ -70,6 +71,17 @@ if __name__ == '__main__':
 
     options.setdefault(group, []).append(arg.dest)
 
+  def parse_positive_int(txt: str) -> int:
+    try:
+      n = int(txt)
+    except ValueError:
+      raise argparse.ArgumentTypeError(f'invalid int value: {txt!r}')
+
+    if n < 0:
+      raise argparse.ArgumentTypeError(f'must be >= 0: {txt!r}')
+
+    return n
+
   def error(code: int, *msg: Tuple[object, ...]):
     print(f'{parser.prog}: error: {" ".join(map(str, msg))}', file=sys.stderr)
     exit(code)
@@ -102,17 +114,17 @@ if __name__ == '__main__':
   )
   mut.add_argument(
     '-b', '--bytes',
-    type=int,
+    type=parse_positive_int,
     help='number of bytes of text to output',
   )
   mut.add_argument(
     '-c', '--chars',
-    type=int,
+    type=parse_positive_int,
     help='number of chars of text to output',
   )
   mut.add_argument(
     '-l', '--lines',
-    type=int,
+    type=parse_positive_int,
     help='number of lines of text to output',
   )
 
@@ -129,7 +141,7 @@ if __name__ == '__main__':
     format,
     '-w', '--width',
     default=shutil.get_terminal_size().columns,
-    type=int,
+    type=parse_positive_int,
     help='the maximum width of wrapped lines (unless break_long_words is false)',
   )
   option(
@@ -164,7 +176,7 @@ if __name__ == '__main__':
     format,
     '--tabsize',
     default=8,
-    type=int,
+    type=parse_positive_int,
     help='''
         Expand tabs in input text to 0 .. 'tabsize' spaces, unless
         'expand_tabs' is false.
@@ -222,7 +234,7 @@ if __name__ == '__main__':
     format,
     '--max-lines',
     default=None,
-    type=int,
+    type=parse_positive_int,
     help='''
         Truncate wrapped lines.
     ''',
@@ -245,62 +257,92 @@ if __name__ == '__main__':
   def lipsum_fill(repetitions: int, **textwrap_args) -> str:
     return textwrap.fill(' '.join([lipsum] * repetitions), **textwrap_args)
 
-  def lipsum_wrap(repetitions: int, **textwrap_args) -> [str]:
+  def lipsum_wrap(repetitions: int, **textwrap_args) -> List[str]:
     return textwrap.wrap(' '.join([lipsum] * repetitions), **textwrap_args)
 
-  def write_text():
-    if args.bytes:
-      if args.bytes < 0:
-        error(1, 'negative value given to --bytes')
+  Lines = List[str]
+  Text  = Union[str, bytes, Lines]
 
+  ## generator of increasingly large chunks of text
+  gen_text: Callable[[], Iterable[Text]]
+  write:    Callable[[IO, Text], None]
+  want_len: int
+
+  if args.bytes:
+    def write(dst: IO, txt: bytes):
+      dst.buffer.write(txt)
+
+    def gen_text():
       for i in itertools.count(1, 5):
         txt = lipsum_fill(i, **textwrap_args).encode('UTF-8')
         nl  = b'\n' if args.trailing_newline else b''
 
         txt = txt[:args.bytes - len(nl)] + nl
 
-        if len(txt) >= args.bytes:
-          dst.buffer.write(txt)
-          return
+        yield txt
 
-    if args.chars is not None:
-      if args.chars < 0:
-        error(1, 'negative value given to --chars')
+    want_len = args.bytes
+  elif args.chars:
+    def write(dst: IO, txt: str):
+      dst.write(txt)
 
+    def gen_text():
       for i in itertools.count(1, 5):
         txt = lipsum_fill(i, **textwrap_args)
         nl  = '\n' if args.trailing_newline else ''
 
         txt = txt[:args.chars - len(nl)] + nl
 
-        if len(txt) >= args.chars:
-          dst.write(txt)
-          exit(0)
+        yield txt
 
-    if args.lines:
-      if args.lines < 0:
-        error(1, 'negative value given to --lines')
+    want_len = args.chars
+  elif args.lines:
+    def write(dst: IO, txt: Lines):
+      if not txt:
+        return
+      txt = iter(txt)
+      dst.write(next(txt))
+      for line in txt:
+        dst.write('\n')
+        dst.write(line)
+      if args.trailing_newline:
+        dst.write('\n')
 
-      for i in itertools.count(1):
+    def gen_text():
+      for i in itertools.count(1, 5):
         txt = lipsum_wrap(i, **textwrap_args)
 
-        if len(txt) >= args.lines:
-          txt = '\n'.join(txt[:args.lines])
-          dst.write(txt)
-          if args.trailing_newline:
-            dst.write('\n')
-          return
+        yield txt
 
-    # if no output option is given just write one repetition of lipsum
+    want_len = args.lines
+  else:
+    # if no option at all was passed just print one repetition of lorem ipsum
     if args.repetitions is None:
       args.repetitions = 1
 
-    if args.repetitions < 0:
-      error(1, 'negative value given to --repetitions')
+    def write(dst: IO, txt: str):
+      dst.write(txt)
+      if args.trailing_newline:
+        dst.write('\n')
 
-    txt = lipsum_fill(args.repetitions, **textwrap_args)
-    dst.write(txt)
-    if args.trailing_newline:
-      dst.write('\n')
+    def gen_text():
+      while 1:
+        yield lipsum_fill(args.repetitions, **textwrap_args)
 
-  write_text()
+    want_len = 1
+
+  ## build up text until it reaches desired length (or stops growing)
+  old_text: Text = []
+
+  for text in gen_text():
+    if len(text) <= len(old_text):
+      # text stopped growing, end.
+      break
+
+    if len(text) >= want_len:
+      break
+
+    old_text = text
+
+  write(dst, text)
+  dst.flush()
