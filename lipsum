@@ -1,5 +1,9 @@
 #!/usr/bin/python3
 
+"""
+  A simple lorem ipsum generator.
+"""
+
 import argparse
 import itertools
 import re
