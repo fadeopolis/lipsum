@@ -10,6 +10,7 @@ import re
 import shutil
 import sys
 import textwrap
+from typing import *
 
 LIPSUM = '''\
 Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor
@@ -24,7 +25,10 @@ if __name__ == '__main__':
 
   options = {}
 
-  def option(group, *names, help: str, default, type: type = str, pretty_default = None):
+  T = TypeVar('T')
+
+  def option(group, *names: Tuple[str, ...], help: str, default: T,
+             type: Type[T] = str, pretty_default: Optional[T] = None):
     assert names
 
     if pretty_default is None:
@@ -39,7 +43,7 @@ if __name__ == '__main__':
 
     options.setdefault(group, []).append(arg.dest)
 
-  def bool_option(group, *names, help: str, default):
+  def bool_option(group, *names: Tuple[str, ...], help: str, default: bool):
     assert names
 
     mut = group.add_mutually_exclusive_group()
@@ -66,7 +70,7 @@ if __name__ == '__main__':
 
     options.setdefault(group, []).append(arg.dest)
 
-  def error(code, *msg):
+  def error(code: int, *msg: Tuple[object, ...]):
     print(f'{parser.prog}: error: {" ".join(map(str, msg))}', file=sys.stderr)
     exit(code)
 
@@ -238,10 +242,10 @@ if __name__ == '__main__':
   dst           = args.output
   lipsum        = args.text
 
-  def lipsum_fill(repetitions, **textwrap_args):
+  def lipsum_fill(repetitions: int, **textwrap_args) -> str:
     return textwrap.fill(' '.join([lipsum] * repetitions), **textwrap_args)
 
-  def lipsum_wrap(repetitions, **textwrap_args):
+  def lipsum_wrap(repetitions: int, **textwrap_args) -> [str]:
     return textwrap.wrap(' '.join([lipsum] * repetitions), **textwrap_args)
 
   def write_text():
@@ -257,7 +261,7 @@ if __name__ == '__main__':
 
         if len(txt) >= args.bytes:
           dst.buffer.write(txt)
-          exit(0)
+          return
 
     if args.chars is not None:
       if args.chars < 0:
